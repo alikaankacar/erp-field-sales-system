@@ -1,0 +1,879 @@
+// ============================================================================
+// KAPSAMLI SAHA SATIŞI VE OPERASYON SİSTEMİ - PRISMA VERİTABANI ŞEMASI
+// ============================================================================
+// Tech Stack: PostgreSQL + Prisma ORM
+// Production-ready, SOLID principles uyumlu
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ============================================================================
+// ENUM TİPLERİ
+// ============================================================================
+
+enum UserRole {
+  SUPER_ADMIN
+  FIELD_REP
+  PRODUCTION_MANAGER
+  WAREHOUSE_MANAGER
+  ACCOUNTING
+  CUSTOMER_SERVICE
+}
+
+enum CustomerSegment {
+  RETAIL
+  WHOLESALE
+  DISTRIBUTOR
+  CORPORATE
+  OTHER
+}
+
+enum CustomerRiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum OrderStatus {
+  DRAFT
+  PENDING
+  CONFIRMED
+  PRODUCTION
+  READY_FOR_SHIPMENT
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  RETURNED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+  OVERDUE
+  REFUNDED
+}
+
+enum ProductionStageStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  QUALITY_FAILED
+  PAUSED
+  REJECTED
+}
+
+enum ShipmentStatus {
+  PENDING
+  PACKED
+  PICKED_UP
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  RETURNED
+  LOST
+  CANCELLED
+}
+
+enum StockMovementType {
+  PURCHASE
+  PRODUCTION_INPUT
+  PRODUCTION_OUTPUT
+  SALES
+  RETURN
+  ADJUSTMENT
+  TRANSFER
+  DAMAGE
+  EXPIRED
+}
+
+enum MediaType {
+  PRODUCT_IMAGE
+  VISIT_PHOTO
+  DELIVERY_PROOF
+  PRODUCTION_STAGE_PHOTO
+  CATALOG_PREVIEW
+  SIGNATURE
+}
+
+// ============================================================================
+// KULLANICI YÖNETİMİ (User Management)
+// ============================================================================
+
+model User {
+  id                    String     @id @default(cuid())
+  email                 String     @unique
+  phoneNumber           String?    @unique
+  firstName             String
+  lastName              String
+  role                  UserRole
+  passwordHash          String
+  isActive              Boolean    @default(true)
+  lastLoginAt           DateTime?
+  
+  // Müşteri Atanması
+  assignedCustomers     Customer[]
+  
+  // İlişkiler
+  visitNotes            VisitNote[]
+  orders                Order[]
+  productionOrders      ProductionOrder[]
+  
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+  deletedAt             DateTime?
+
+  @@index([email])
+  @@index([role])
+  @@index([isActive])
+  @@map("users")
+}
+
+// ============================================================================
+// MÜŞTERİ YÖNETİMİ (Customer Management)
+// ============================================================================
+
+model Customer {
+  id                    String     @id @default(cuid())
+  
+  // Temel Bilgiler
+  name                  String
+  legalName             String?
+  taxId                 String?    @unique
+  registrationNumber    String?
+  segment               CustomerSegment
+  riskLevel             CustomerRiskLevel @default(LOW)
+  
+  // İletişim
+  phoneNumber           String
+  altPhoneNumber        String?
+  email                 String?
+  website               String?
+  contactPerson         String?
+  contactPersonPhone    String?
+  
+  // Adres
+  addressStreet         String
+  addressCity           String
+  addressProvince       String
+  addressPostalCode     String
+  addressCountry        String    @default("Turkey")
+  latitude              Float?
+  longitude             Float?
+  
+  // Saha Temsilcisi Atanması
+  assignedToId          String?
+  assignedTo            User?      @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
+  
+  // Finansal Bilgiler
+  creditLimit           Float     @default(0)
+  currentDebt           Float     @default(0)
+  totalPurchaseAmount   Float     @default(0)
+  averageOrderValue     Float     @default(0)
+  paymentTerms          Int       @default(30)
+  
+  // İstatistikler
+  totalOrders           Int       @default(0)
+  totalVisits           Int       @default(0)
+  lastVisitDate         DateTime?
+  lastOrderDate         DateTime?
+  
+  // Tercihler
+  defaultWarehouseId    String?
+  preferredDeliveryDays String?   // JSON: {mon, tue, ...}
+  notes                 String?
+  
+  isActive              Boolean    @default(true)
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+  deletedAt             DateTime?
+
+  // İlişkiler
+  visitNotes            VisitNote[]
+  orders                Order[]
+  priceListAssignments  PriceListAssignment[]
+
+  @@index([assignedToId])
+  @@index([segment])
+  @@index([riskLevel])
+  @@index([lastVisitDate])
+  @@index([isActive])
+  @@map("customers")
+}
+
+// ============================================================================
+// ZİYARET YÖNETİMİ (Visit Management)
+// ============================================================================
+
+model VisitNote {
+  id                    String     @id @default(cuid())
+  
+  // İlişkiler
+  customerId            String
+  customer              Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  fieldRepId            String
+  fieldRep              User       @relation(fields: [fieldRepId], references: [id], onDelete: Restrict)
+  
+  // Ziyaret Bilgileri
+  visitDate             DateTime   @default(now())
+  durationMinutes       Int?
+  latitude              Float?
+  longitude             Float?
+  
+  // Notlar
+  notes                 String?
+  voiceNoteTranscript   String?
+  photos                Media[]    @relation("VisitPhotos")
+  
+  // Gözlemler
+  stockObservation      String?
+  competitorInfo        String?
+  displayMerchandising  String?
+  orderPotential        String?
+  
+  // Sonraki Adımlar
+  followUpRequired      Boolean    @default(false)
+  followUpDate          DateTime?
+  
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  @@index([customerId])
+  @@index([fieldRepId])
+  @@index([visitDate])
+  @@map("visit_notes")
+}
+
+// ============================================================================
+// ÜRÜN YÖNETİMİ (Product Management)
+// ============================================================================
+
+model Product {
+  id                    String     @id @default(cuid())
+  
+  // Kimlik
+  sku                   String     @unique
+  name                  String
+  description           String?
+  category              String
+  subCategory           String?
+  
+  // Fiziksel Özellikler
+  weight                Float?
+  dimensions            String?    // JSON: {width, height, depth, unit}
+  
+  // Stok
+  currentStock          Int        @default(0)
+  minStockLevel         Int        @default(10)
+  maxStockLevel         Int        @default(1000)
+  reservedStock         Int        @default(0)
+  
+  // Fiyatlandırma
+  baseCost              Float
+  basePrice             Float
+  taxRate               Float      @default(18) // %
+  
+  // Üretim
+  hasBOM                Boolean    @default(false)
+  bomId                 String?
+  bom                   BOM?       @relation("ProductBOM", fields: [bomId], references: [id])
+  
+  // Medya
+  images                Media[]    @relation("ProductImages")
+  
+  // Durum
+  isActive              Boolean    @default(true)
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+  deletedAt             DateTime?
+
+  // İlişkiler
+  variants              ProductVariant[]
+  orderItems            OrderItem[]
+  stockMovements        StockMovement[]
+  priceListItems        PriceListItem[]
+  productionOrders      ProductionOrder[]
+
+  @@index([sku])
+  @@index([category])
+  @@index([isActive])
+  @@map("products")
+}
+
+model ProductVariant {
+  id                    String     @id @default(cuid())
+  
+  // İlişki
+  productId             String
+  product               Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  
+  // Kimlik
+  sku                   String     @unique
+  barcode               String?    @unique
+  qrCode                String?
+  
+  // Özellikler
+  attributes            String     // JSON: {color, size, model, material}
+  
+  // Stok
+  stock                 Int        @default(0)
+  reservedStock         Int        @default(0)
+  
+  // Fiyatlandırma
+  priceModifier         Float      @default(0) // % değişim
+  
+  // Medya
+  images                Media[]    @relation("VariantImages")
+  
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  @@index([productId])
+  @@index([sku])
+  @@index([barcode])
+  @@map("product_variants")
+}
+
+model Media {
+  id                    String     @id @default(cuid())
+  
+  // Dosya Bilgileri
+  url                   String
+  publicId              String?    // Cloudinary/S3 ID
+  mimeType              String?
+  mediaType             MediaType
+  fileSize              Int?       // bytes
+  
+  // İlişkiler (one-to-many polymorphic)
+  productId             String?
+  product               Product?   @relation("ProductImages", fields: [productId], references: [id], onDelete: SetNull)
+  
+  variantId             String?
+  variant               ProductVariant? @relation("VariantImages", fields: [variantId], references: [id], onDelete: SetNull)
+  
+  visitNoteId           String?
+  visitNote             VisitNote? @relation("VisitPhotos", fields: [visitNoteId], references: [id], onDelete: SetNull)
+  
+  shipmentId            String?
+  shipment              Shipment?  @relation("DeliveryProofs", fields: [shipmentId], references: [id], onDelete: SetNull)
+  
+  productionStageId     String?
+  productionStage       ProductionStage? @relation("StagePhotos", fields: [productionStageId], references: [id], onDelete: SetNull)
+  
+  uploadedAt            DateTime   @default(now())
+  deletedAt             DateTime?
+
+  @@index([mediaType])
+  @@index([productId])
+  @@index([visitNoteId])
+  @@map("media")
+}
+
+// ============================================================================
+// FİYAT LİSTESİ YÖNETİMİ (Price List Management)
+// ============================================================================
+
+model PriceList {
+  id                    String     @id @default(cuid())
+  
+  name                  String
+  description           String?
+  
+  // Geçerlilik
+  validFrom             DateTime
+  validTo               DateTime?
+  isActive              Boolean    @default(true)
+  
+  // İstatistikler
+  itemCount             Int        @default(0)
+  
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  // İlişkiler
+  items                 PriceListItem[]
+  assignments           PriceListAssignment[]
+
+  @@index([isActive])
+  @@index([validFrom])
+  @@map("price_lists")
+}
+
+model PriceListItem {
+  id                    String     @id @default(cuid())
+  
+  // İlişkiler
+  priceListId           String
+  priceList             PriceList  @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  
+  productId             String
+  product               Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  
+  // Fiyat
+  price                 Float
+  minQuantity           Int        @default(1)
+  
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  @@unique([priceListId, productId])
+  @@map("price_list_items")
+}
+
+model PriceListAssignment {
+  id                    String     @id @default(cuid())
+  
+  // İlişkiler
+  priceListId           String
+  priceList             PriceList  @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  
+  customerId            String
+  customer              Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  priority              Int        @default(0)
+  assignedAt            DateTime   @default(now())
+
+  @@unique([priceListId, customerId])
+  @@map("price_list_assignments")
+}
+
+// ============================================================================
+// SİPARİŞ YÖNETİMİ (Order Management)
+// ============================================================================
+
+model Order {
+  id                    String     @id @default(cuid())
+  orderNumber           String     @unique
+  
+  // İlişkiler
+  customerId            String
+  customer              Customer   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  
+  fieldRepId            String
+  fieldRep              User       @relation(fields: [fieldRepId], references: [id], onDelete: Restrict)
+  
+  // Durum
+  status                OrderStatus @default(DRAFT)
+  paymentStatus         PaymentStatus @default(UNPAID)
+  
+  // Finansal
+  subtotal              Float      @default(0)
+  discountAmount        Float      @default(0)
+  discountPercentage    Float      @default(0)
+  taxAmount             Float      @default(0)
+  totalAmount           Float      @default(0)
+  
+  // Teslimat
+  shippingAddress       String
+  shippingCity          String
+  shippingProvince      String
+  shippingPostalCode    String
+  shippingCountry       String    @default("Turkey")
+  deliveryDate          DateTime?
+  
+  // Notlar
+  notes                 String?
+  internalNotes         String?
+  
+  // Tarihler
+  createdAt             DateTime   @default(now())
+  confirmedAt           DateTime?
+  cancelledAt           DateTime?
+  updatedAt             DateTime   @updatedAt
+
+  // İlişkiler
+  items                 OrderItem[]
+  productionOrders      ProductionOrder[]
+  shipments             Shipment[]
+
+  @@index([customerId])
+  @@index([fieldRepId])
+  @@index([status])
+  @@index([paymentStatus])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                    String     @id @default(cuid())
+  
+  // İlişkiler
+  orderId               String
+  order                 Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  productId             String
+  product               Product    @relation(fields: [productId], references: [id], onDelete: Restrict)
+  
+  // Miktar & Fiyat
+  quantity              Int
+  unitPrice             Float
+  discountPercentage    Float      @default(0)
+  discountAmount        Float      @default(0)
+  taxRate               Float      @default(18)
+  totalPrice            Float
+  
+  // Notlar
+  notes                 String?
+  
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+// ============================================================================
+// ÜRÜN REÇETESI (BOM - Bill of Materials)
+// ============================================================================
+
+model BOM {
+  id                    String     @id @default(cuid())
+  
+  // İlişki
+  productId             String?    @unique
+  product               Product?   @relation("ProductBOM", fields: [productId], references: [id], onDelete: SetNull)
+  
+  // Bilgiler
+  name                  String
+  description           String?
+  version               Int        @default(1)
+  
+  isActive              Boolean    @default(true)
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  // İlişkiler
+  components            BOMComponent[]
+  productionOrders      ProductionOrder[]
+
+  @@index([productId])
+  @@index([isActive])
+  @@map("boms")
+}
+
+model BOMComponent {
+  id                    String     @id @default(cuid())
+  
+  // İlişkiler
+  bomId                 String
+  bom                   BOM        @relation(fields: [bomId], references: [id], onDelete: Cascade)
+  
+  componentProductId    String
+  componentProduct      Product    @relation(fields: [componentProductId], references: [id], onDelete: Restrict)
+  
+  // Miktar
+  quantity              Float
+  unit                  String     @default("pcs")
+  
+  // Atık
+  wastePercentage       Float      @default(0)
+  
+  createdAt             DateTime   @default(now())
+
+  @@unique([bomId, componentProductId])
+  @@map("bom_components")
+}
+
+// ============================================================================
+// ÜRETİM YÖNETİMİ (Production Management)
+// ============================================================================
+
+model ProductionOrder {
+  id                    String     @id @default(cuid())
+  productionNumber      String     @unique
+  
+  // İlişkiler
+  orderId               String
+  order                 Order      @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  
+  productId             String
+  product               Product    @relation(fields: [productId], references: [id], onDelete: Restrict)
+  
+  bomId                 String
+  bom                   BOM        @relation(fields: [bomId], references: [id], onDelete: Restrict)
+  
+  productionManagerId   String
+  productionManager     User       @relation(fields: [productionManagerId], references: [id], onDelete: Restrict)
+  
+  // Miktar
+  quantity              Int
+  completedQuantity     Int        @default(0)
+  rejectedQuantity      Int        @default(0)
+  
+  // Planlama
+  priority              Int        @default(0)
+  plannedStartDate      DateTime
+  plannedEndDate        DateTime
+  actualStartDate       DateTime?
+  actualEndDate         DateTime?
+  
+  // Notlar
+  notes                 String?
+  
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  // İlişkiler
+  stages                ProductionStage[]
+
+  @@index([productionManagerId])
+  @@index([orderId])
+  @@index([productId])
+  @@index([plannedStartDate])
+  @@map("production_orders")
+}
+
+model ProductionStage {
+  id                    String     @id @default(cuid())
+  
+  // İlişki
+  productionOrderId     String
+  productionOrder       ProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+  
+  // Sıra & İsim
+  stageNumber           Int
+  stageName             String
+  description           String?
+  
+  // Operasyon Tanımı
+  durationMinutes       Int?
+  station               String?
+  
+  // Durum
+  status                ProductionStageStatus @default(PENDING)
+  
+  // Zamanlama
+  startedAt             DateTime?
+  completedAt           DateTime?
+  
+  // Miktar Takibi
+  inputQuantity         Int?
+  outputQuantity        Int?
+  wasteQuantity         Int        @default(0)
+  rejectedQuantity      Int        @default(0)
+  
+  // Kanıt
+  notes                 String?
+  photos                Media[]    @relation("StagePhotos")
+  
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  @@index([productionOrderId])
+  @@index([status])
+  @@index([stageNumber])
+  @@map("production_stages")
+}
+
+// ============================================================================
+// DEPO & STOK YÖNETİMİ (Warehouse & Stock Management)
+// ============================================================================
+
+model Warehouse {
+  id                    String     @id @default(cuid())
+  
+  code                  String     @unique
+  name                  String
+  location              String
+  
+  // Adres
+  street                String?
+  city                  String?
+  province              String?
+  postalCode            String?
+  
+  // Kapasite
+  totalCapacity         Float?
+  currentUtilization    Float      @default(0)
+  
+  isActive              Boolean    @default(true)
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  // İlişkiler
+  stockLocations        StockLocation[]
+
+  @@map("warehouses")
+}
+
+model StockLocation {
+  id                    String     @id @default(cuid())
+  
+  // İlişki
+  warehouseId           String
+  warehouse             Warehouse  @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  
+  // Konum
+  rackNumber            String
+  shelfNumber           String
+  binNumber             String
+  
+  // Ürün & Miktar
+  productId             String
+  currentQuantity       Int        @default(0)
+  maxCapacity           Int?
+  
+  lastRestockDate       DateTime?
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  @@unique([warehouseId, rackNumber, shelfNumber, binNumber, productId])
+  @@map("stock_locations")
+}
+
+model StockMovement {
+  id                    String     @id @default(cuid())
+  
+  // İlişki
+  productId             String
+  product               Product    @relation(fields: [productId], references: [id], onDelete: Restrict)
+  
+  // Hareket Bilgileri
+  movementType          StockMovementType
+  quantity              Int
+  
+  // Referans
+  warehouseId           String?
+  referenceType         String?    // Order, ProductionOrder, Return, etc.
+  referenceId           String?
+  
+  // Notlar
+  notes                 String?
+  createdAt             DateTime   @default(now())
+
+  @@index([productId])
+  @@index([movementType])
+  @@index([referenceType, referenceId])
+  @@index([createdAt])
+  @@map("stock_movements")
+}
+
+// ============================================================================
+// KARGO & LJOJİSTİK (Logistics & Shipping)
+// ============================================================================
+
+model Shipment {
+  id                    String     @id @default(cuid())
+  shipmentNumber        String     @unique
+  
+  // İlişki
+  orderId               String
+  order                 Order      @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  
+  // Durum
+  status                ShipmentStatus @default(PENDING)
+  
+  // Kargo Firması
+  carrierName           String?
+  trackingNumber        String?
+  trackingUrl           String?
+  
+  // Paketleme
+  packageCount          Int        @default(1)
+  totalWeight          Float?
+  dimensions            String?    // JSON
+  
+  // Teslimat
+  pickupDate            DateTime?
+  estimatedDeliveryDate DateTime?
+  actualDeliveryDate    DateTime?
+  
+  // Kanıt
+  deliveryProofs        Media[]    @relation("DeliveryProofs")
+  deliveryNotes         String?
+  recipientName         String?
+  signatureUrl          String?
+  
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  @@index([orderId])
+  @@index([status])
+  @@index([trackingNumber])
+  @@map("shipments")
+}
+
+// ============================================================================
+// MUHASEBE (Accounting)
+// ============================================================================
+
+model Invoice {
+  id                    String     @id @default(cuid())
+  invoiceNumber         String     @unique
+  
+  customerId            String
+  
+  // Tarihler
+  issueDate             DateTime   @default(now())
+  dueDate               DateTime
+  
+  // Tutarlar
+  subtotal              Float
+  taxAmount             Float
+  totalAmount           Float
+  paidAmount            Float      @default(0)
+  
+  // Notlar
+  notes                 String?
+  
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  @@index([customerId])
+  @@index([dueDate])
+  @@map("invoices")
+}
+
+model Payment {
+  id                    String     @id @default(cuid())
+  
+  invoiceId             String
+  
+  amount                Float
+  paymentMethod         String     // Bank Transfer, Cash, Check, Card
+  
+  paymentDate           DateTime   @default(now())
+  transactionId         String?
+  
+  notes                 String?
+  
+  createdAt             DateTime   @default(now())
+
+  @@index([invoiceId])
+  @@index([paymentDate])
+  @@map("payments")
+}
+
+// ============================================================================
+// AUDİT & LOGGING
+// ============================================================================
+
+model AuditLog {
+  id                    String     @id @default(cuid())
+  
+  userId                String
+  action                String     // CREATE, UPDATE, DELETE
+  entity                String     // Order, Customer, etc.
+  entityId              String
+  
+  changes               String     // JSON
+  
+  ipAddress             String?
+  userAgent             String?
+  
+  createdAt             DateTime   @default(now())
+
+  @@index([userId])
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
